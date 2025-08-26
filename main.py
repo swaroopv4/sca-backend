@@ -1,13 +1,11 @@
-# FILE: main.py
-# This is your main server application.
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import networkx as nx
 import json
 import httpx # For making API calls to Hugging Face
+import os # Import the os module to access environment variables
 
-# --- 1. The Predictive Coder (World Model) ---
+# --- The Predictive Coder (World Model) ---
 # We use a NetworkX graph to store our world knowledge.
 # In a real app, this would be a persistent database.
 G = nx.DiGraph()
@@ -19,15 +17,23 @@ G.add_node("heat", properties=["energy"])
 G.add_edge("water", "ice", action="remove_heat")
 G.add_edge("ice", "water", action="apply_heat")
 
-# --- 2. The Curiosity Engine (Logic) & API ---
+# --- The Curiosity Engine (Logic) & API ---
 app = FastAPI()
 
-# This is your Hugging Face model's API endpoint.
-# IMPORTANT: Replace YOUR_USERNAME with your actual Hugging Face username.
-HF_API_URL = "https://api-inference.huggingface.co/models/YOUR_USERNAME/sca-language-engine-v1"
-# IMPORTANT: Get your Hugging Face token from https://huggingface.co/settings/tokens
-HF_TOKEN = "hf_YOUR_TOKEN_HERE" # Replace with your actual token
+# =======================================================================
+# Securely load secrets from Environment Variables.
+# You will set these in the Render dashboard, NOT in the code.
+# =======================================================================
+HF_USERNAME = os.environ.get("HF_USERNAME")
+HF_TOKEN = os.environ.get("HF_TOKEN")
+# =======================================================================
 
+# Check if the environment variables are set
+if not HF_USERNAME or not HF_TOKEN:
+    # This error will show in your Render logs if you forget to set the variables.
+    raise RuntimeError("HF_USERNAME and HF_TOKEN must be set as environment variables.")
+
+HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_USERNAME}/sca-language-engine-v1"
 headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
 class Query(BaseModel):
@@ -62,8 +68,6 @@ async def process_prompt(query: Query):
         human_response = await call_language_engine(json.dumps(response_data), "to_sentence")
         return {"response": human_response, "status": "success"}
 
-    # You can add more actions like "apply_state_change" here in the future.
-
     return {"response": "I understand the subject, but I'm not sure how to perform that action yet.", "status": "unknown_action"}
 
 async def call_language_engine(input_text: str, direction: str):
@@ -79,7 +83,7 @@ async def call_language_engine(input_text: str, direction: str):
     
     payload = {
         "inputs": prompt_template,
-        "parameters": {"max_new_tokens": 100}
+        "parameters": {"max_new_tokens": 100, "return_full_text": False}
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -87,11 +91,7 @@ async def call_language_engine(input_text: str, direction: str):
             response = await client.post(HF_API_URL, headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()
-            # The response is the full text, so we need to extract just the part after "### Response:"
-            full_response = result[0]['generated_text']
-            # This split logic is crucial to get only the model's output
-            clean_response = full_response.split("### Response:")[1].strip()
-            return clean_response
+            return result[0]['generated_text'].strip()
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=f"Error from HF API: {e.response.text}")
         except Exception as e:
